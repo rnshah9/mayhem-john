@@ -1,6 +1,5 @@
 project: rnshah9/mayhem-john
-target: john
-image: ghcr.io/rnshah9/playground:mayhem-john
+target: uaf2john
 
 cmds:
   - cmd: /repo/run/uaf2john @@
