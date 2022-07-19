@@ -2,4 +2,4 @@ project: john
 target: uaf2john
 
 cmds:
-  - cmd: /repo/run/uaf2john @@
+  - cmd: /uaf2john @@
