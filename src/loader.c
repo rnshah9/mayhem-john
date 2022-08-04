@@ -209,17 +209,24 @@ static void read_file(struct db_main *db, char *name, int flags,
 	warn_enc = (john_main_process && (options.target_enc != ENC_RAW) &&
 	            cfg_get_bool(SECTION_OPTIONS, NULL, "WarnEncoding", 0));
 
-	if (flags & RF_ALLOW_DIR) {
-		if (stat(name, &file_stat)) {
-			if (flags & RF_ALLOW_MISSING)
-				if (errno == ENOENT) return;
-			pexit("stat: %s", path_expand(name));
-		} else
-			if (S_ISDIR(file_stat.st_mode)) return;
+	if (stat(path_expand(name), &file_stat)) {
+		if ((flags & RF_ALLOW_MISSING) && errno == ENOENT)
+			return;
+		pexit("stat: %s", path_expand(name));
+	}
+
+	if ((flags & RF_ALLOW_DIR) && S_ISDIR(file_stat.st_mode))
+		return;
+
+	if (ldr_in_pot && S_ISFIFO(file_stat.st_mode)) {
+		if (john_main_process)
+			fprintf(stderr, "Error, cannot use FIFO as pot file: %s\n", path_expand(name));
+		error();
 	}
 
 	if (!(file = fopen(path_expand(name), "r"))) {
-		if ((flags & RF_ALLOW_MISSING) && errno == ENOENT) return;
+		if ((flags & RF_ALLOW_MISSING) && errno == ENOENT)
+			return;
 		pexit("fopen: %s", path_expand(name));
 	}
 
@@ -241,15 +248,13 @@ static void read_file(struct db_main *db, char *name, int flags,
 			     options.input_enc == UTF_8)) {
 				if (!valid_utf8((UTF8*)u8check)) {
 					warn_enc = 0;
-					fprintf(stderr, "Warning: invalid UTF-8"
-					        " seen reading %s\n", name);
+					fprintf(stderr, "Warning: invalid UTF-8 seen reading %s\n", path_expand(name));
 				}
 			} else if (options.input_enc != UTF_8 &&
 			           (line != line_buf ||
 			            valid_utf8((UTF8*)u8check) > 1)) {
 				warn_enc = 0;
-				fprintf(stderr, "Warning: UTF-8 seen reading "
-				        "%s\n", name);
+				fprintf(stderr, "Warning: UTF-8 seen reading %s\n", path_expand(name));
 			}
 		}
 		process_line(db, line);
@@ -471,7 +476,7 @@ void ldr_set_encoding(struct fmt_main *format)
 	}
 
 	/* john.conf alternative for --internal-codepage */
-	if (options.flags & (FLG_RULES_IN_USE | FLG_SINGLE_CHK | FLG_BATCH_CHK | FLG_MASK_CHK))
+	if (options.flags & (FLG_RULES_IN_USE | FLG_BATCH_CHK | FLG_MASK_CHK))
 	if ((!options.target_enc || options.target_enc == UTF_8) && !options.internal_cp) {
 		if (!(options.internal_cp =
 		      cp_name2id(cfg_get_param(SECTION_OPTIONS, NULL, "DefaultInternalCodepage"), 1)))
@@ -1353,6 +1358,7 @@ void ldr_free_db(struct db_main *db, int base)
 					dyna_salt_remove(psalt->salt);
 				psalt = psalt->next;
 			}
+			db->salts = NULL;
 		}
 		MEM_FREE(db->salt_hash);
 		MEM_FREE(db->cracked_hash);
@@ -1928,7 +1934,9 @@ static void ldr_fill_user_words(struct db_main *db)
 	} else {
 		map_pos = mem_map;
 		map_end = mem_map + file_len;
+#if MGETL_HAS_SIMD
 		map_scan_end = map_end - VSCANSZ;
+#endif
 	}
 #endif /* HAVE_MMAP */
 

@@ -13,20 +13,21 @@
 #if AC_BUILT
 #include "autoconfig.h"
 #else
-#ifndef sparc
-#undef _POSIX_SOURCE
-#define _POSIX_SOURCE /* for fileno(3) */
+#ifndef _XOPEN_SOURCE
+#define _XOPEN_SOURCE /* for fileno(3) and stat(2) */
 #endif
 #endif
 
 #include <stdint.h>
 #include <stdio.h>
+#include <sys/types.h>
 #include <sys/stat.h>
 
 #if (!AC_BUILT || HAVE_UNISTD_H) && !_MSC_VER
 #include <unistd.h>
 #endif
 
+#define NEED_OS_FORK
 #include "os.h"
 
 #if !AC_BUILT
@@ -535,7 +536,8 @@ void do_wordlist_crack(struct db_main *db, const char *name, int rules)
 
 	static unsigned int prev_g;
 	static unsigned long long prev_p;
-	if (rules && cfg_get_bool(SECTION_OPTIONS, NULL, "PerRuleStats", 0)) {
+	if (rules && cfg_get_bool(SECTION_OPTIONS, NULL, "PerRuleStats", 0) && !(options.flags & FLG_MASK_CHK) &&
+	    (!(options.flags & FLG_NOLOG) || options.log_stderr)) {
 		rules = 2;
 		prev_g = status.guess_count;
 		prev_p = status.cands;
@@ -574,6 +576,14 @@ void do_wordlist_crack(struct db_main *db, const char *name, int rules)
 
 		file_is_fifo = ((st.st_mode & S_IFMT) == S_IFIFO);
 
+#if OS_FORK
+		if (options.fork && file_is_fifo) {
+			if (john_main_process)
+				fprintf(stderr, "Error, cannot use --fork with FIFO as wordlist file.\n");
+			error();
+		}
+#endif
+
 		if (john_main_process)
 			log_event("- %s %s: %.100s", loopBack ? "Loopback pot" : "Wordlist",
 			          file_is_fifo ? "FIFO" : "file",
@@ -598,8 +608,7 @@ void do_wordlist_crack(struct db_main *db, const char *name, int rules)
 		jtr_fseek64(word_file, 0, SEEK_SET);
 		if (file_len == 0 && !loopBack) {
 			if (john_main_process)
-				fprintf(stderr, "Error, dictionary file is "
-				        "empty\n");
+				fprintf(stderr, "Error, wordlist file is empty\n");
 			error();
 		}
 
@@ -630,7 +639,9 @@ void do_wordlist_crack(struct db_main *db, const char *name, int rules)
 			} else {
 				map_pos = mem_map;
 				map_end = mem_map + file_len;
+#if MGETL_HAS_SIMD
 				map_scan_end = map_end - VSCANSZ;
+#endif
 			}
 		}
 #endif
@@ -1389,7 +1400,8 @@ next_rule:
 			if (rules > 1 && prerule) {
 				unsigned long long p = status.cands, fake_p = 0;
 				if (!(options.flags & FLG_STDOUT)) do {
-					crk_process_key("injected wrong password");
+					if (crk_direct_process_key("PerRuleStats"))
+						goto done;
 					fake_p++;
 				} while (p == status.cands);
 				unsigned int g = status.guess_count - prev_g;
@@ -1439,6 +1451,7 @@ next_rule:
 	if (pipe_input)
 		goto GRAB_NEXT_PIPE_LOAD;
 
+done:
 	crk_done();
 	rec_done(event_abort || (status.pass && db->salts));
 
